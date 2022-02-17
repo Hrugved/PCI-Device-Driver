@@ -10,9 +10,8 @@ u16 vendor, device;
 /* This sample driver supports device with VID = 0x010F, and PID = 0x0F0E*/
 static struct pci_device_id my_driver_id_table[] = {
     {PCI_DEVICE(0x1234, 0xdeba)},
-    {
-        0,
-    }};
+    {0,}
+};
 
 MODULE_DEVICE_TABLE(pci, my_driver_id_table);
 
@@ -66,14 +65,20 @@ int check_identification(struct pci_dev *pdev)
     return 0;
 }
 
-// void check_liveness(struct pci_dev *pdev)
-// {
-//     u8 __iomem* mem =  get_memory();
-//     unsigned int identification = ioread32(mem);
-//     if(identification!=IDENTIFICATION) {
-//         printk(KERN_ERR "invalid identification 0x%X", identification)
-//     } else printk(KERN_INFO "identification verified 0x%X", identification);
-// }
+int check_liveness(struct pci_dev *pdev)
+{
+    u8 __iomem* mem =  get_memory(pdev);
+    u32 num = 0x65485BAF;
+    iowrite32(num,mem+4);
+    u32 num_device = ioread32(mem+4);
+    if (num_device != ~num)
+    {
+        printk(KERN_ERR "liveness check failed, num 0x%X ~num 0x%X device 0x%X\n", num, ~num, num_device);
+        return -1;
+    }
+    printk(KERN_INFO "liveness check successful\n");
+    return 0;
+}
 
 int set_up_device(struct pci_dev *pdev)
 {
@@ -95,7 +100,6 @@ int set_up_device(struct pci_dev *pdev)
     }
     mmio_start = pci_resource_start(pdev, 0);
     mmio_len = pci_resource_len(pdev, 0);
-    printk(KERN_INFO "mmio_start %lu mmio_len %lu\n", mmio_start, mmio_len);
     printk(KERN_INFO "mmio_start 0x%lX mmio_len 0x%lX\n", mmio_start, mmio_len);
     drv_priv = kzalloc(sizeof(struct my_driver_priv), GFP_KERNEL);
     if (!drv_priv)
@@ -111,8 +115,8 @@ int set_up_device(struct pci_dev *pdev)
     }
     pci_set_drvdata(pdev, drv_priv);
     if (check_identification(pdev) < 0) return -1;
+    if(check_liveness(pdev)<0) return -1;
     return 0;
-    // if(check_liveness(pdev)<0) return -1;
 }
 
 static int __init mypci_driver_init(void)
