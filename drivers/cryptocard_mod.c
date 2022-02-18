@@ -239,9 +239,7 @@ static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, cha
 
 static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
 {
-	u8 val;
-	sscanf(buf, "%hhu" , &val);
-    val = val==255 ? 0 : 255;
+	u8 val = *buf;
     pr_info("sysfs_store %s %hhu", attr->attr.name, val);
     if(!(val==0 || val==1)) {
         pr_err("sysfs value can only be 0 or 1, recieved %hhu", val);
