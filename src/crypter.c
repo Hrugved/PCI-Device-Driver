@@ -1,16 +1,23 @@
 #include<crypter.h>
+#include<stdio.h>
 
 /*Function template to create handle for the CryptoCard device.
 On success it returns the device handle as an integer*/
 DEV_HANDLE create_handle()
-{
-  return ERROR;
+{ 
+  DEV_HANDLE fd = open("/dev/cryptcard_device",O_RDWR);
+   if(fd < 0){
+       perror("open");
+       exit(-1);
+   }
+  return fd;
 }
 
 /*Function template to close device handle.
 Takes an already opened device handle as an arguments*/
 void close_handle(DEV_HANDLE cdev)
 {
+  close(cdev);
 }
 
 /*Function template to encrypt a message using MMIO/DMA/Memory-mapped.
@@ -22,7 +29,12 @@ Takes four arguments
 */
 int encrypt(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length, uint8_t isMapped)
 {
-  return ERROR;
+  if(write(cdev, addr, length) < 0){
+    perror("write");
+    exit(-1);
+   }
+  // return ERROR;
+  return 0;
 }
 
 /*Function template to decrypt a message using MMIO/DMA/Memory-mapped.
@@ -34,7 +46,12 @@ Takes four arguments
 */
 int decrypt(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length, uint8_t isMapped)
 {
-  return ERROR;
+  // return ERROR;
+  if(read(cdev, addr, length) < 0){
+    perror("read");
+    exit(-1);
+  }
+  return 0;
 }
 
 /*Function template to set the key pair.
@@ -45,7 +62,8 @@ Takes three arguments
 Return 0 in case of key is set successfully*/
 int set_key(DEV_HANDLE cdev, KEY_COMP a, KEY_COMP b)
 {
-  return ERROR;
+  // return ERROR;
+  return 0;
 }
 
 /*Function template to set configuration of the device to operate.
@@ -56,7 +74,17 @@ Takes three arguments
 Return 0 in case of key is set successfully*/
 int set_config(DEV_HANDLE cdev, config_t type, uint8_t value)
 {
-  return ERROR;
+  int fd;
+  if(type==DMA) {
+    fd = open("/sys/kernel/cryptcard_sysfs/DMA", O_WRONLY);
+  } else {
+    fd = open("/sys/kernel/cryptcard_sysfs/INTERRUPT", O_WRONLY);
+  }
+  // char *c = (char *)&value;
+  // printf("%u")
+  write (fd, (const char *)&value, 32);
+  close(fd);
+  return 0;
 }
 
 /*Function template to device input/output memory into user space.

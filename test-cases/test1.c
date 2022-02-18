@@ -32,6 +32,8 @@ int main()
   decrypt(cdev, op_text, size, 0);
   printf("Decrypted Text: %s\n", op_text);
 
+  set_config(cdev, INTERRUPT, 0);
+
   close_handle(cdev);
   return 0;
 }
