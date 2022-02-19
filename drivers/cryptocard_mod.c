@@ -16,6 +16,9 @@
 #define MY_DRIVER "my_pci_driver"
 #define IDENTIFICATION 0x10C5730
 
+#define OFFSET_KEY_A 10
+#define OFFSET_KEY_B 11
+
 u16 vendor, device;
 
 /* This sample driver supports device with VID = 0x010F, and PID = 0x0F0E*/
@@ -43,6 +46,8 @@ static int cdev_release(struct inode *inode, struct file *file);
 static ssize_t cdev_read(struct file *filp, char __user *buf, size_t len,loff_t * off);
 static ssize_t cdev_write(struct file *filp, const char *buf, size_t len, loff_t * off);
 static int setup_char_device(void);
+void set_key_a();
+void set_key_b();
 
 /* Driver registration structure */
 static struct pci_driver my_driver = {
@@ -74,12 +79,18 @@ static struct cdev cryptcard_cdev;
 
 static volatile u8 INTERRUPT = 0;
 static volatile u8 DMA = 0;
+static volatile u8 KEY_A = 0;
+static volatile u8 KEY_B = 0;
 struct kobject *kobj_ref;
 struct kobj_attribute dma_attr = __ATTR(DMA, 0660, sysfs_show, sysfs_store);
 struct kobj_attribute interrupt_attr = __ATTR(INTERRUPT, 0660, sysfs_show, sysfs_store);
+struct kobj_attribute keya_attr = __ATTR(KEY_A, 0660, sysfs_show, sysfs_store);
+struct kobj_attribute keyb_attr = __ATTR(KEY_B, 0660, sysfs_show, sysfs_store);
 static struct attribute *attrs[] = {
 	&dma_attr.attr,
 	&interrupt_attr.attr,
+    &keya_attr.attr,
+    &keyb_attr.attr,
 	NULL,
 };
 static struct attribute_group attr_group = {.attrs = attrs};
@@ -159,6 +170,7 @@ static int set_up_device(struct pci_dev *pdev)
         release_device(pdev);
         return -EIO;
     }
+    
     pci_set_drvdata(pdev, drv_priv);
     if (check_identification(pdev) < 0) return -1;
     if(check_liveness(pdev)<0) return -1;
@@ -233,7 +245,9 @@ static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, cha
     pr_info("sysfs_show %s", attr->attr.name);
 	u8 val;
 	if (strcmp(attr->attr.name, "DMA") == 0) val = DMA;
-	else val = INTERRUPT;
+	else if (strcmp(attr->attr.name, "INTERRUPT") == 0) val = INTERRUPT;
+    else if (strcmp(attr->attr.name, "KEY_A") == 0) val = KEY_A;
+    else if (strcmp(attr->attr.name, "KEY_B") == 0) val = KEY_B;
 	return sprintf(buf, "%d\n", val);
 }
 
@@ -241,12 +255,24 @@ static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, co
 {
 	u8 val = *buf;
     pr_info("sysfs_store %s %hhu", attr->attr.name, val);
-    if(!(val==0 || val==1)) {
-        pr_err("sysfs value can only be 0 or 1, recieved %hhu", val);
-        return -EINVAL;
+    if ((strcmp(attr->attr.name, "DMA") == 0) || (strcmp(attr->attr.name, "INTERRUPT") == 0) ) {
+        if(!(val==0 || val==1)) {
+            pr_err("invalid value, can only be 0 or 1, recieved %hhu", val);
+            return -EINVAL;
+        }
+        if (strcmp(attr->attr.name, "DMA") == 0) DMA = val;
+	    else INTERRUPT = val;
     }
-	if (strcmp(attr->attr.name, "DMA") == 0) DMA = val;
-	else INTERRUPT = val;
+	else {     
+        if (strcmp(attr->attr.name, "KEY_A") == 0) {
+            KEY_A = val;
+            set_key_a();
+        }
+        else {
+            KEY_B = val;
+            set_key_b();    
+        }
+    }
 	return count;
 }
 
@@ -307,6 +333,28 @@ r_device:
 r_class:
     unregister_chrdev_region(dev,1);
     return -1;
+}
+
+void set_key_a() {
+    u8 __iomem* mem =  get_memory(pdev);
+    iowrite8(KEY_A,mem+OFFSET_KEY_A);
+    u8 r = ioread8(mem+OFFSET_KEY_A);
+    if (r != KEY_A)
+    {
+        pr_err("key A set failed, key 0x%X device 0x%X\n", KEY_A, r);
+    }
+    pr_info("key A set successful\n");
+}
+
+void set_key_b() {
+    u8 __iomem* mem =  get_memory(pdev);
+    iowrite8(KEY_B,mem+OFFSET_KEY_B);
+    u8 r = ioread8(mem+OFFSET_KEY_B);
+    if (r != KEY_B)
+    {
+        pr_err("key B set failed, key 0x%X device 0x%X\n", KEY_B, r);
+    }
+    pr_info("key B set successful\n");
 }
 
 MODULE_LICENSE("GPL");
