@@ -32,7 +32,6 @@ MODULE_DEVICE_TABLE(pci, my_driver_id_table);
 static int my_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent);
 static void my_driver_remove(struct pci_dev *pdev);
 static void release_device(struct pci_dev *pdev);
-static u8 __iomem* get_memory(struct pci_dev *pdev);
 static int check_identification(struct pci_dev *pdev);
 static int set_up_device(struct pci_dev *pdev);
 static int __init mypci_driver_init(void);
@@ -46,8 +45,7 @@ static int cdev_release(struct inode *inode, struct file *file);
 static ssize_t cdev_read(struct file *filp, char __user *buf, size_t len,loff_t * off);
 static ssize_t cdev_write(struct file *filp, const char *buf, size_t len, loff_t * off);
 static int setup_char_device(void);
-void set_key_a();
-void set_key_b();
+static void set_key(u8 isKeyA);
 
 /* Driver registration structure */
 static struct pci_driver my_driver = {
@@ -66,12 +64,7 @@ static struct file_operations fops =
         .release        = cdev_release,
 };
 
-/* This is a "private" data structure */
-/* You can store there any data that should be passed between driver's functions */
-static struct my_driver_priv
-{
-    u8 __iomem *hwmem;
-};
+u8 __iomem *MEM;
 
 dev_t dev = 0;
 static struct class *dev_class;
@@ -102,17 +95,9 @@ static void release_device(struct pci_dev *pdev)
     pci_release_region(pdev, pci_select_bars(pdev, IORESOURCE_MEM));
 }
 
-static u8 __iomem* get_memory(struct pci_dev *pdev)
-{
-    struct my_driver_priv *drv_priv = (struct my_driver_priv *)pci_get_drvdata(pdev);
-    if (!drv_priv) pr_err("drv_priv is null");
-    return drv_priv->hwmem;
-}
-
 static int check_identification(struct pci_dev *pdev)
 {
-    u8 __iomem *mem = get_memory(pdev);
-    unsigned int identification = ioread32(mem);
+    unsigned int identification = ioread32(MEM);
     if (identification != IDENTIFICATION)
     {
         pr_err("invalid identification 0x%X", identification);
@@ -124,10 +109,9 @@ static int check_identification(struct pci_dev *pdev)
 
 static int check_liveness(struct pci_dev *pdev)
 {
-    u8 __iomem* mem =  get_memory(pdev);
     u32 num = 0x65485BAF;
-    iowrite32(num,mem+4);
-    u32 num_device = ioread32(mem+4);
+    iowrite32(num,MEM+4);
+    u32 num_device = ioread32(MEM+4);
     if (num_device != ~num)
     {
         pr_err("liveness check failed, num 0x%X ~num 0x%X device 0x%X\n", num, ~num, num_device);
@@ -141,7 +125,7 @@ static int set_up_device(struct pci_dev *pdev)
 {
     int bar, err;
     unsigned long mmio_start, mmio_len;
-    struct my_driver_priv *drv_priv;
+    // struct my_driver_priv *drv_priv;
     pci_read_config_word(pdev, PCI_VENDOR_ID, &vendor);
     pci_read_config_word(pdev, PCI_DEVICE_ID, &device);
     pr_info("Registered: Device vid: 0x%X pid: 0x%X\n", vendor, device);
@@ -158,20 +142,20 @@ static int set_up_device(struct pci_dev *pdev)
     mmio_start = pci_resource_start(pdev, 0);
     mmio_len = pci_resource_len(pdev, 0);
     pr_info("mmio_start 0x%lX mmio_len 0x%lX\n", mmio_start, mmio_len);
-    drv_priv = kzalloc(sizeof(struct my_driver_priv), GFP_KERNEL);
-    if (!drv_priv)
-    {
-        release_device(pdev);
-        return -ENOMEM;
-    }
-    drv_priv->hwmem = ioremap(mmio_start, mmio_len);
-    if (!drv_priv->hwmem)
+    // drv_priv = kzalloc(sizeof(struct my_driver_priv), GFP_KERNEL);
+    // if (!drv_priv)
+    // {
+    //     release_device(pdev);
+    //     return -ENOMEM;
+    // }
+    MEM = ioremap(mmio_start, mmio_len);
+    if (!MEM)
     {
         release_device(pdev);
         return -EIO;
     }
-    
-    pci_set_drvdata(pdev, drv_priv);
+
+    // pci_set_drvdata(pdev, drv_priv);
     if (check_identification(pdev) < 0) return -1;
     if(check_liveness(pdev)<0) return -1;
     return 0;
@@ -266,11 +250,11 @@ static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, co
 	else {     
         if (strcmp(attr->attr.name, "KEY_A") == 0) {
             KEY_A = val;
-            set_key_a();
+            set_key(1);
         }
         else {
             KEY_B = val;
-            set_key_b();    
+            set_key(0);    
         }
     }
 	return count;
@@ -335,26 +319,12 @@ r_class:
     return -1;
 }
 
-void set_key_a() {
-    u8 __iomem* mem =  get_memory(pdev);
-    iowrite8(KEY_A,mem+OFFSET_KEY_A);
-    u8 r = ioread8(mem+OFFSET_KEY_A);
-    if (r != KEY_A)
-    {
-        pr_err("key A set failed, key 0x%X device 0x%X\n", KEY_A, r);
+static void set_key(u8 isKeyA) {
+    if(isKeyA) {
+        iowrite8(KEY_A,MEM+OFFSET_KEY_A);
+    } else {
+        iowrite8(KEY_B,MEM+OFFSET_KEY_B);
     }
-    pr_info("key A set successful\n");
-}
-
-void set_key_b() {
-    u8 __iomem* mem =  get_memory(pdev);
-    iowrite8(KEY_B,mem+OFFSET_KEY_B);
-    u8 r = ioread8(mem+OFFSET_KEY_B);
-    if (r != KEY_B)
-    {
-        pr_err("key B set failed, key 0x%X device 0x%X\n", KEY_B, r);
-    }
-    pr_info("key B set successful\n");
 }
 
 MODULE_LICENSE("GPL");
