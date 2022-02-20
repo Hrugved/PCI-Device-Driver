@@ -2,8 +2,6 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/kernel.h>
-#include <linux/init.h>
-#include <linux/module.h>
 #include <linux/kdev_t.h>
 #include <linux/fs.h>
 #include <linux/cdev.h>
@@ -12,12 +10,19 @@
 #include<linux/uaccess.h>              //copy_to/from_user()
 #include<linux/sysfs.h> 
 #include<linux/kobject.h> 
+#include<linux/delay.h> 
 
 #define MY_DRIVER "my_pci_driver"
 #define IDENTIFICATION 0x10C5730
 
-#define OFFSET_KEY_A 10
-#define OFFSET_KEY_B 11
+#define OFFSET_IDENTIFICATION 0x0
+#define OFFSET_LIVENESS 0x4
+#define OFFSET_KEY_A 0xa
+#define OFFSET_KEY_B 0xb
+#define OFFSET_MMIO_LENGTH 0xc
+#define OFFSET_MMIO_STATUS 0x20
+#define OFFSET_MMIO_DATA_ADDRESS 0x80
+#define OFFSET_DATA 0xa8
 
 u16 vendor, device;
 
@@ -45,7 +50,10 @@ static int cdev_release(struct inode *inode, struct file *file);
 static ssize_t cdev_read(struct file *filp, char __user *buf, size_t len,loff_t * off);
 static ssize_t cdev_write(struct file *filp, const char *buf, size_t len, loff_t * off);
 static int setup_char_device(void);
-static void set_key(u8 isKeyA);
+static void set_key(void);
+static void mmio_encrypt(void);
+static void write_to_device(void);
+static void read_from_device(void);
 
 /* Driver registration structure */
 static struct pci_driver my_driver = {
@@ -68,7 +76,7 @@ dev_t dev = 0;
 static struct class *dev_class;
 static struct cdev cryptcard_cdev;
 static u8 __iomem *MEM;
-char *kbuf;
+ char *kbuf;
 static u32 klen;
 
 static volatile u8 INTERRUPT = 0;
@@ -98,7 +106,7 @@ static void release_device(struct pci_dev *pdev)
 
 static int check_identification(struct pci_dev *pdev)
 {
-    unsigned int identification = ioread32(MEM);
+    unsigned int identification = ioread32(MEM+OFFSET_IDENTIFICATION);
     if (identification != IDENTIFICATION)
     {
         pr_err("invalid identification 0x%X", identification);
@@ -112,7 +120,7 @@ static int check_liveness(struct pci_dev *pdev)
 {
     u32 num = 0x65485BAF;
     iowrite32(num,MEM+4);
-    u32 num_device = ioread32(MEM+4);
+    u32 num_device = ioread32(MEM+OFFSET_LIVENESS);
     if (num_device != ~num)
     {
         pr_err("liveness check failed, num 0x%X ~num 0x%X device 0x%X\n", num, ~num, num_device);
@@ -150,6 +158,8 @@ static int set_up_device(struct pci_dev *pdev)
     }
     if (check_identification(pdev) < 0) return -1;
     if(check_liveness(pdev)<0) return -1;
+    u32 val = ioread32(MEM+OFFSET_MMIO_STATUS);
+    pr_info("mmio status register %u", val);
     return 0;
 }
 
@@ -242,11 +252,12 @@ static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, co
 	else {     
         if (strcmp(attr->attr.name, "KEY_A") == 0) {
             KEY_A = val;
-            set_key(1);
+            set_key();
         }
         else {
             KEY_B = val;
-            set_key(0);    
+            set_key();   
+         
         }
     }
 	return count;
@@ -286,6 +297,8 @@ static ssize_t cdev_write(struct file *filp, const char __user *buf, size_t len,
     kbuf = kmalloc(klen+1, GFP_KERNEL);
     if(copy_from_user(kbuf, buf, len) == 0) {
         pr_info("Write: %s",kbuf);  
+        pr_info("%zu %zu %p\n", sizeof(char*), sizeof(kbuf), kbuf);
+        mmio_encrypt();
         return len;
     }
     return -1;
@@ -319,12 +332,40 @@ r_class:
     return -1;
 }
 
-static void set_key(u8 isKeyA) {
-    if(isKeyA) {
-        iowrite8(KEY_A,MEM+OFFSET_KEY_A);
-    } else {
-        iowrite8(KEY_B,MEM+OFFSET_KEY_B);
+static void set_key(void) {
+    iowrite32((KEY_A << 8) | KEY_B,MEM+0x8);
+}
+
+static void write_to_device(void) {
+    int i;
+    for (i = 0; i < ((klen+4)/4); i++) {
+        u32 *cur = (u32 *)kbuf;
+        u32 pos = OFFSET_DATA + i * 4;
+        cur += i;
+        iowrite32(*cur, MEM + pos);
     }
+}
+
+static void read_from_device(void) {
+    int i;
+    for (i = 0; i < ((klen+4)/4); i++) {
+        u32 pos = OFFSET_DATA + i * 4;
+        u32 val = ioread32(MEM + pos);
+        u32 *cur = (u32 *)kbuf;
+        cur += i;
+        *cur = val;
+    }
+}
+
+static void mmio_encrypt(void) {
+    iowrite32(klen,MEM+OFFSET_MMIO_LENGTH);
+    write_to_device();
+    iowrite32(OFFSET_DATA,MEM+OFFSET_MMIO_DATA_ADDRESS);
+    u32 val = ioread32(MEM+OFFSET_MMIO_STATUS);
+    do {
+        val = ioread32(MEM+OFFSET_MMIO_STATUS);
+    } while(val==1);
+    read_from_device();
 }
 
 MODULE_LICENSE("GPL");

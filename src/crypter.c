@@ -1,15 +1,25 @@
 #include<crypter.h>
 #include<stdio.h>
 
+// int arr[5];
+
+// void insert(int n, int i) {
+//   arr[i]=n;
+// }
+
+// int get(int i) {
+//   return arr[i];
+// }
+
 /*Function template to create handle for the CryptoCard device.
 On success it returns the device handle as an integer*/
 DEV_HANDLE create_handle()
 { 
   DEV_HANDLE fd = open("/dev/cryptcard_device",O_RDWR);
-   if(fd < 0){
-       perror("open");
-       exit(-1);
-   }
+  if(fd < 0){
+      perror("open");
+      exit(-1);
+  }
   return fd;
 }
 
@@ -33,6 +43,10 @@ int encrypt(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length, uint8_t isMapped)
     perror("write");
     exit(-1);
    }
+  if(read(cdev, addr, length) < 0){
+  perror("read");
+  exit(-1);
+  }
   // return ERROR;
   return 0;
 }
@@ -62,7 +76,13 @@ Takes three arguments
 Return 0 in case of key is set successfully*/
 int set_key(DEV_HANDLE cdev, KEY_COMP a, KEY_COMP b)
 {
-  // return ERROR;
+  int fd;
+  fd = open("/sys/kernel/cryptcard_sysfs/KEY_A", O_WRONLY);
+  write (fd, (const char *)&a, 1);
+  close(fd);
+  fd = open("/sys/kernel/cryptcard_sysfs/KEY_B", O_WRONLY);
+  write (fd, (const char *)&b, 1);
+  close(fd);
   return 0;
 }
 
@@ -80,9 +100,7 @@ int set_config(DEV_HANDLE cdev, config_t type, uint8_t value)
   } else {
     fd = open("/sys/kernel/cryptcard_sysfs/INTERRUPT", O_WRONLY);
   }
-  // char *c = (char *)&value;
-  // printf("%u")
-  write (fd, (const char *)&value, 32);
+  write (fd, (const char *)&value, 1);
   close(fd);
   return 0;
 }
