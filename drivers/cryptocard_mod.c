@@ -58,7 +58,7 @@ static ssize_t cdev_read(struct file *filp, char __user *buf, size_t len, loff_t
 static ssize_t cdev_write(struct file *filp, const char *buf, size_t len, loff_t *off);
 static int setup_char_device(void);
 static void set_key(void);
-static void mmio_encrypt(void);
+static void mmio(void);
 static void write_to_device(void);
 static void read_from_device(void);
 static irqreturn_t irq_handler(int irq, void *cookie);
@@ -92,16 +92,19 @@ static volatile u8 INTERRUPT = 0;
 static volatile u8 DMA = 0;
 static volatile u8 KEY_A = 0;
 static volatile u8 KEY_B = 0;
+static volatile u8 DECRYPT = 0;
 struct kobject *kobj_ref;
 struct kobj_attribute dma_attr = __ATTR(DMA, 0660, sysfs_show, sysfs_store);
 struct kobj_attribute interrupt_attr = __ATTR(INTERRUPT, 0660, sysfs_show, sysfs_store);
 struct kobj_attribute keya_attr = __ATTR(KEY_A, 0660, sysfs_show, sysfs_store);
 struct kobj_attribute keyb_attr = __ATTR(KEY_B, 0660, sysfs_show, sysfs_store);
+struct kobj_attribute decrypt_attr = __ATTR(DECRYPT, 0660, sysfs_show, sysfs_store);
 static struct attribute *attrs[] = {
     &dma_attr.attr,
     &interrupt_attr.attr,
     &keya_attr.attr,
     &keyb_attr.attr,
+    &decrypt_attr.attr,
     NULL,
 };
 static struct attribute_group attr_group = {.attrs = attrs};
@@ -240,7 +243,7 @@ static void my_driver_remove(struct pci_dev *pdev)
 
 static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
-    pr_info("sysfs_show %s", attr->attr.name);
+    pr_info("sysfs_show %s\n", attr->attr.name);
     u8 val;
     if (strcmp(attr->attr.name, "DMA") == 0)
         val = DMA;
@@ -250,18 +253,20 @@ static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, cha
         val = KEY_A;
     else if (strcmp(attr->attr.name, "KEY_B") == 0)
         val = KEY_B;
+    else if (strcmp(attr->attr.name, "DECRYPT") == 0)
+        val = DECRYPT;
     return sprintf(buf, "%d\n", val);
 }
 
 static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
 {
     u8 val = *buf;
-    pr_info("sysfs_store %s %hhu", attr->attr.name, val);
+    pr_info("sysfs_store %s %hhu\n", attr->attr.name, val);
     if ((strcmp(attr->attr.name, "DMA") == 0) || (strcmp(attr->attr.name, "INTERRUPT") == 0))
     {
         if (!(val == 0 || val == 1))
         {
-            pr_err("invalid value, can only be 0 or 1, recieved %hhu", val);
+            pr_err("invalid value, can only be 0 or 1, recieved %hhu\n", val);
             return -EINVAL;
         }
         if (strcmp(attr->attr.name, "DMA") == 0)
@@ -269,7 +274,7 @@ static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, co
         else
             INTERRUPT = val;
     }
-    else
+    else if((strcmp(attr->attr.name, "KEY_A") == 0) || (strcmp(attr->attr.name, "KEY_B") == 0))
     {
         if (strcmp(attr->attr.name, "KEY_A") == 0)
         {
@@ -281,6 +286,13 @@ static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, co
             KEY_B = val;
             set_key();
         }
+    } else {
+        if (!(val == 0 || val == 1))
+        {
+            pr_err("invalid value, can only be 0 or 1, recieved %hhu\n", val);
+            return -EINVAL;
+        }
+        DECRYPT = val;
     }
     return count;
 }
@@ -323,7 +335,7 @@ static ssize_t cdev_write(struct file *filp, const char __user *buf, size_t len,
     {
         pr_info("Write: %s", kbuf);
         is_data_ready=0;
-        mmio_encrypt();
+        mmio();
         return len;
     }
     return -1;
@@ -396,15 +408,18 @@ static void read_from_device(void)
     pr_info("is_data_ready %d\n", is_data_ready);
 }
 
-static void mmio_encrypt(void)
+static void mmio(void)
 {
     iowrite32(klen, MEM + OFFSET_MMIO_LENGTH);
     write_to_device();
-    if (INTERRUPT)
-    {
+    u32 status = 0x0;
+    if(DECRYPT) status = 0x02;
+    if (INTERRUPT) {
+        status |= 0x80;
         pr_info("MMIO with INTERRUPT");
-        iowrite32(0x80, MEM + OFFSET_MMIO_STATUS);
     }
+    pr_info("writing mmio status register 0x%x", status);
+    iowrite32(status, MEM + OFFSET_MMIO_STATUS);
     iowrite32(OFFSET_DATA, MEM + OFFSET_MMIO_DATA_ADDRESS);
     if (!INTERRUPT)
     {
@@ -413,7 +428,7 @@ static void mmio_encrypt(void)
         do
         {
             val = ioread32(MEM + OFFSET_MMIO_STATUS);
-        } while (val == 1);
+        } while ((val&1) == 1);
         read_from_device();
     }
 }

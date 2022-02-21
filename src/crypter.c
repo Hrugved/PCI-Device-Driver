@@ -39,6 +39,10 @@ Takes four arguments
 */
 int encrypt(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length, uint8_t isMapped)
 {
+  int fd = open("/sys/kernel/cryptocard_sysfs/DECRYPT", O_WRONLY);
+  uint8_t value = 0;
+  write (fd, (const char *)&value, 1);
+  close(fd);
   if(write(cdev, addr, length) < 0){
     perror("write");
     exit(-1);
@@ -47,7 +51,6 @@ int encrypt(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length, uint8_t isMapped)
     perror("read");
     exit(-1);
   }
-  // return ERROR;
   return 0;
 }
 
@@ -60,7 +63,14 @@ Takes four arguments
 */
 int decrypt(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length, uint8_t isMapped)
 {
-  // return ERROR;
+  int fd = open("/sys/kernel/cryptocard_sysfs/DECRYPT", O_WRONLY);
+  uint8_t value = 1;
+  write (fd, (const char *)&value, 1);
+  close(fd);
+  if(write(cdev, addr, length) < 0){
+    perror("write");
+    exit(-1);
+   }
   if(read(cdev, addr, length) < 0){
     perror("read");
     exit(-1);

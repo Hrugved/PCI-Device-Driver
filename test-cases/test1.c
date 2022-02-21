@@ -3,17 +3,17 @@
 #include <stdio.h>
 #include <crypter.h>
 
-int main()
+int main( int argc, char *argv[] )
 {
   DEV_HANDLE cdev;
-  char *msg = "Hello CS730! is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop publishing software like Aldus PageMaker including versions of Lorem Ipsum.";
+  char *msg = "Hello CS730! dfgdsfgdsfgdsfgdsfgds";
   KEY_COMP a=30, b=17;
   uint64_t size = strlen(msg);
   char *op_text = malloc(size);
   strcpy(op_text, msg);
   cdev = create_handle();
 
-  printf("%lld\n", size);
+  printf("%ld\n", size);
 
   if(cdev == ERROR)
   {
@@ -21,7 +21,8 @@ int main()
     exit(0);
   }
 
-  set_config(cdev, INTERRUPT, 1);
+  set_config(cdev, DMA, atoi(argv[1]));
+  set_config(cdev, INTERRUPT, atoi(argv[2]));
 
   if(set_key(cdev, a, b) == ERROR){
     printf("Unable to set key\n");
@@ -33,11 +34,8 @@ int main()
   encrypt(cdev, op_text, size, 0);
   printf("Encrypted Text: %s\n", op_text);
 
-  // decrypt(cdev, op_text, size, 0);
-  // printf("Decrypted Text: %s\n", op_text);
-
-
-  // set_key(cdev,3,245);
+  decrypt(cdev, op_text, size, 0);
+  printf("Decrypted Text: %s\n", op_text);
 
   close_handle(cdev);
   return 0;
