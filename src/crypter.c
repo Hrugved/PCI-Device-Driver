@@ -44,8 +44,8 @@ int encrypt(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length, uint8_t isMapped)
     exit(-1);
    }
   if(read(cdev, addr, length) < 0){
-  perror("read");
-  exit(-1);
+    perror("read");
+    exit(-1);
   }
   // return ERROR;
   return 0;
@@ -77,10 +77,10 @@ Return 0 in case of key is set successfully*/
 int set_key(DEV_HANDLE cdev, KEY_COMP a, KEY_COMP b)
 {
   int fd;
-  fd = open("/sys/kernel/cryptcard_sysfs/KEY_A", O_WRONLY);
+  fd = open("/sys/kernel/cryptocard_sysfs/KEY_A", O_WRONLY);
   write (fd, (const char *)&a, 1);
   close(fd);
-  fd = open("/sys/kernel/cryptcard_sysfs/KEY_B", O_WRONLY);
+  fd = open("/sys/kernel/cryptocard_sysfs/KEY_B", O_WRONLY);
   write (fd, (const char *)&b, 1);
   close(fd);
   return 0;
@@ -96,9 +96,9 @@ int set_config(DEV_HANDLE cdev, config_t type, uint8_t value)
 {
   int fd;
   if(type==DMA) {
-    fd = open("/sys/kernel/cryptcard_sysfs/DMA", O_WRONLY);
+    fd = open("/sys/kernel/cryptocard_sysfs/DMA", O_WRONLY);
   } else {
-    fd = open("/sys/kernel/cryptcard_sysfs/INTERRUPT", O_WRONLY);
+    fd = open("/sys/kernel/cryptocard_sysfs/INTERRUPT", O_WRONLY);
   }
   write (fd, (const char *)&value, 1);
   close(fd);
