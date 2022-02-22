@@ -6,7 +6,7 @@
 int main( int argc, char *argv[] )
 {
   DEV_HANDLE cdev;
-  char *msg = "Hello CS730! dfgdsfgdsfgdsfgdsfgds";
+  char *msg = "Hello CS730!";
   KEY_COMP a=30, b=17;
   uint64_t size = strlen(msg);
   char *op_text = malloc(size);

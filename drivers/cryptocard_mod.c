@@ -12,6 +12,7 @@
 #include <linux/kobject.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
+#include <linux/dma-mapping.h>
 
 #define MY_DRIVER "my_pci_driver"
 #define IDENTIFICATION 0x10C5730
@@ -29,6 +30,9 @@
 #define OFFSET_DATA 0xa8
 #define OFFSET_INTERRUPT_STATUS 0x24
 #define OFFSET_INTERRUPT_ACK 0x64
+#define OFFSET_DMA_DATA_ADDRESS 0x90
+#define OFFSET_DMA_LENGTH 0x98
+#define OFFSET_DMA_COMMAND 0xa0
 
 u16 vendor, device;
 
@@ -62,7 +66,8 @@ static void mmio(void);
 static void write_to_device(void);
 static void read_from_device(void);
 static irqreturn_t irq_handler(int irq, void *cookie);
-int set_interrupts(struct pci_dev *pdev);
+static int set_interrupts(struct pci_dev *pdev);
+static void dma(void);
 
 /* Driver registration structure */
 static struct pci_driver my_driver = {
@@ -84,9 +89,11 @@ dev_t dev = 0;
 static struct class *dev_class;
 static struct cdev cryptcard_cdev;
 static u8 __iomem *MEM;
-char *kbuf;
+char *mmio_buf;
 static u32 klen;
 static volatile int is_data_ready;
+char *dma_buf;
+dma_addr_t dma_handle;
 
 static volatile u8 INTERRUPT = 0;
 static volatile u8 DMA = 0;
@@ -168,6 +175,13 @@ static int setup_device(struct pci_dev *pdev)
         release_device(pdev);
         return -EIO;
     }
+    // dma_buf = kmalloc(1000000, GFP_KERNEL);
+    mmio_buf = kmalloc(1000000, GFP_KERNEL);
+    dma_buf = dma_alloc_coherent(&(pdev->dev), 1000000, &dma_handle, GFP_KERNEL);
+    if (!dma_buf) {
+        printk(KERN_ERR "failed to allocate coherent buffer\n");
+        return -EIO;
+    }
     if (check_identification(pdev) < 0)
         return -1;
     if (check_liveness(pdev) < 0)
@@ -237,6 +251,7 @@ static int my_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent
 static void my_driver_remove(struct pci_dev *pdev)
 {
     // pci_free_irq_vectors(pdev);
+    dma_free_coherent(&pdev->dev, 1000000, dma_buf, dma_handle);
     release_device(pdev);
     pr_info("Removed: Device vid: 0x%X pid: 0x%X\n", vendor, device);
 }
@@ -316,10 +331,11 @@ static int cdev_release(struct inode *inode, struct file *file)
 */
 static ssize_t cdev_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
 {
-    while(is_data_ready==0) udelay(100);
+    while(is_data_ready==0) {udelay(100);}
+    char *kbuf = (DMA) ? dma_buf : mmio_buf;
     if (copy_to_user(buf, kbuf, len) == 0)
     {
-        pr_info("Read: %s", kbuf);
+        pr_info("Read: %s, DMA %d", kbuf, (kbuf==dma_buf));
         return len;
     }
     return -1;
@@ -330,13 +346,14 @@ static ssize_t cdev_read(struct file *filp, char __user *buf, size_t len, loff_t
 static ssize_t cdev_write(struct file *filp, const char __user *buf, size_t len, loff_t *off)
 {
     klen = len;
-    kbuf = kmalloc(klen + 1, GFP_KERNEL);
-    if (copy_from_user(kbuf, buf, len) == 0)
+    char *kbuf = (DMA) ? dma_buf : mmio_buf;
+    if (copy_from_user(kbuf, buf, klen) == 0)
     {
-        pr_info("Write: %s", kbuf);
+        pr_info("Write: %s, DMA %d", kbuf, (kbuf==dma_buf));
         is_data_ready=0;
-        mmio();
-        return len;
+        if(DMA) dma();
+        else mmio();
+        return klen;
     }
     return -1;
 }
@@ -384,12 +401,12 @@ static void write_to_device(void)
     int i;
     for (i = 0; i < ((klen + 4) / 4); i++)
     {
-        u32 *cur = (u32 *)kbuf;
+        u32 *cur = (u32 *)mmio_buf;
         u32 pos = OFFSET_DATA + i * 4;
         cur += i;
         iowrite32(*cur, MEM + pos);
     }
-    pr_info("Write to device %s\n", kbuf);
+    pr_info("Write to device %s\n", mmio_buf);
 }
 
 static void read_from_device(void)
@@ -399,13 +416,37 @@ static void read_from_device(void)
     {
         u32 pos = OFFSET_DATA + i * 4;
         u32 val = ioread32(MEM + pos);
-        u32 *cur = (u32 *)kbuf;
+        u32 *cur = (u32 *)mmio_buf;
         cur += i;
         *cur = val;
     }
-    pr_info("READ from device %s\n", kbuf);
+    pr_info("READ from device %s\n", mmio_buf);
     is_data_ready=1;
     pr_info("is_data_ready %d\n", is_data_ready);
+}
+
+static void dma(void)
+{
+    iowrite32(klen, MEM + OFFSET_DMA_LENGTH);
+    u32 status = 0x1;
+    if(DECRYPT) status |= 0x2;
+    if (INTERRUPT) {
+        status |= 0x4;
+        pr_info("DMA with INTERRUPT");
+    }
+    pr_info("writing DMA command register 0x%x", status);
+    iowrite32(dma_handle, MEM + OFFSET_DMA_DATA_ADDRESS);
+    iowrite32(status, MEM + OFFSET_DMA_COMMAND);
+    if (!INTERRUPT)
+    {
+        pr_info("DMA w/o INTERRUPT");
+        u32 val;
+        do
+        {
+            val = ioread32(MEM + OFFSET_DMA_COMMAND);
+        } while ((val&1) == 1);
+        is_data_ready = 1;
+    }
 }
 
 static void mmio(void)
@@ -413,7 +454,7 @@ static void mmio(void)
     iowrite32(klen, MEM + OFFSET_MMIO_LENGTH);
     write_to_device();
     u32 status = 0x0;
-    if(DECRYPT) status = 0x02;
+    if(DECRYPT) status |= 0x02;
     if (INTERRUPT) {
         status |= 0x80;
         pr_info("MMIO with INTERRUPT");
@@ -424,7 +465,7 @@ static void mmio(void)
     if (!INTERRUPT)
     {
         pr_info("MMIO w/o INTERRUPT");
-        u32 val = ioread32(MEM + OFFSET_MMIO_STATUS);
+        u32 val;
         do
         {
             val = ioread32(MEM + OFFSET_MMIO_STATUS);
@@ -444,12 +485,20 @@ static irqreturn_t irq_handler(int irq, void *cookie)
         read_from_device();
         iowrite32(val, MEM + OFFSET_INTERRUPT_ACK);
         return IRQ_HANDLED;
+    } else if (val == INTERRUPT_DMA)
+    {
+        pr_info("interrupt status 0x%x\n", val);
+        u32 v2 = ioread32(MEM + OFFSET_DMA_COMMAND);
+        pr_info("dma status 0x%x\n", v2);
+        iowrite32(val, MEM + OFFSET_INTERRUPT_ACK);
+        is_data_ready = 1;
+        return IRQ_HANDLED;
     }
     return IRQ_NONE;
 }
 
 /* Reqest interrupt and setup handler */
-int set_interrupts(struct pci_dev *pdev)
+static int set_interrupts(struct pci_dev *pdev)
 {
     int status = request_irq(IRQ_NO, irq_handler, IRQF_SHARED, "cryptocard_device", (void *)(irq_handler));
     if (status < 0)
