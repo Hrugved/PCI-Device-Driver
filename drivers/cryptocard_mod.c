@@ -13,6 +13,7 @@
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/dma-mapping.h>
+#include <linux/mm.h> 
 
 #define MY_DRIVER "my_pci_driver"
 #define IDENTIFICATION 0x10C5730
@@ -60,6 +61,7 @@ static int cdev_open(struct inode *inode, struct file *file);
 static int cdev_release(struct inode *inode, struct file *file);
 static ssize_t cdev_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
 static ssize_t cdev_write(struct file *filp, const char *buf, size_t len, loff_t *off);
+static int cdev_mmap(struct file *filp, struct vm_area_struct *vma);
 static int setup_char_device(void);
 static void set_key(void);
 static void mmio(void);
@@ -83,6 +85,7 @@ static struct file_operations fops =
         .write = cdev_write,
         .open = cdev_open,
         .release = cdev_release,
+        .mmap = cdev_mmap
 };
 
 dev_t dev = 0;
@@ -100,18 +103,21 @@ static volatile u8 DMA = 0;
 static volatile u8 KEY_A = 0;
 static volatile u8 KEY_B = 0;
 static volatile u8 DECRYPT = 0;
+static volatile u8 IS_MAPPED = 0;
 struct kobject *kobj_ref;
 struct kobj_attribute dma_attr = __ATTR(DMA, 0660, sysfs_show, sysfs_store);
 struct kobj_attribute interrupt_attr = __ATTR(INTERRUPT, 0660, sysfs_show, sysfs_store);
 struct kobj_attribute keya_attr = __ATTR(KEY_A, 0660, sysfs_show, sysfs_store);
 struct kobj_attribute keyb_attr = __ATTR(KEY_B, 0660, sysfs_show, sysfs_store);
 struct kobj_attribute decrypt_attr = __ATTR(DECRYPT, 0660, sysfs_show, sysfs_store);
+struct kobj_attribute isMapped_attr = __ATTR(IS_MAPPED, 0660, sysfs_show, sysfs_store);
 static struct attribute *attrs[] = {
     &dma_attr.attr,
     &interrupt_attr.attr,
     &keya_attr.attr,
     &keyb_attr.attr,
     &decrypt_attr.attr,
+    &isMapped_attr.attr,
     NULL,
 };
 static struct attribute_group attr_group = {.attrs = attrs};
@@ -149,10 +155,11 @@ static int check_liveness(struct pci_dev *pdev)
     return 0;
 }
 
+    unsigned long mmio_start, mmio_len;
 static int setup_device(struct pci_dev *pdev)
 {
     int bar, err;
-    unsigned long mmio_start, mmio_len;
+    // unsigned long mmio_start, mmio_len;
     pci_read_config_word(pdev, PCI_VENDOR_ID, &vendor);
     pci_read_config_word(pdev, PCI_DEVICE_ID, &device);
     pr_info("Registered: Device vid: 0x%X pid: 0x%X\n", vendor, device);
@@ -270,6 +277,8 @@ static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, cha
         val = KEY_B;
     else if (strcmp(attr->attr.name, "DECRYPT") == 0)
         val = DECRYPT;
+    else if (strcmp(attr->attr.name, "IS_MAPPED") == 0)
+        val = IS_MAPPED;
     return sprintf(buf, "%d\n", val);
 }
 
@@ -277,19 +286,7 @@ static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, co
 {
     u8 val = *buf;
     pr_info("sysfs_store %s %hhu\n", attr->attr.name, val);
-    if ((strcmp(attr->attr.name, "DMA") == 0) || (strcmp(attr->attr.name, "INTERRUPT") == 0))
-    {
-        if (!(val == 0 || val == 1))
-        {
-            pr_err("invalid value, can only be 0 or 1, recieved %hhu\n", val);
-            return -EINVAL;
-        }
-        if (strcmp(attr->attr.name, "DMA") == 0)
-            DMA = val;
-        else
-            INTERRUPT = val;
-    }
-    else if((strcmp(attr->attr.name, "KEY_A") == 0) || (strcmp(attr->attr.name, "KEY_B") == 0))
+    if((strcmp(attr->attr.name, "KEY_A") == 0) || (strcmp(attr->attr.name, "KEY_B") == 0))
     {
         if (strcmp(attr->attr.name, "KEY_A") == 0)
         {
@@ -307,7 +304,14 @@ static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, co
             pr_err("invalid value, can only be 0 or 1, recieved %hhu\n", val);
             return -EINVAL;
         }
-        DECRYPT = val;
+        if (strcmp(attr->attr.name, "DMA") == 0)
+            DMA = val;
+        else if(strcmp(attr->attr.name, "INTERRUPT") == 0)
+            INTERRUPT = val;
+        else if(strcmp(attr->attr.name, "DECRYPT") == 0)
+            DECRYPT = val;
+        else if(strcmp(attr->attr.name, "IS_MAPPED") == 0)
+            IS_MAPPED = val;
     }
     return count;
 }
@@ -333,13 +337,14 @@ static ssize_t cdev_read(struct file *filp, char __user *buf, size_t len, loff_t
 {
     while(is_data_ready==0) {udelay(100);}
     char *kbuf = (DMA) ? dma_buf : mmio_buf;
-    if (copy_to_user(buf, kbuf, len) == 0)
+    if (IS_MAPPED || (copy_to_user(buf, kbuf, len) == 0))
     {
-        pr_info("Read: %s, DMA %d", kbuf, (kbuf==dma_buf));
+        pr_info("Read: %s", kbuf);
         return len;
     }
     return -1;
 }
+
 /*
 ** This function will be called when we write the Device file
 */
@@ -347,9 +352,9 @@ static ssize_t cdev_write(struct file *filp, const char __user *buf, size_t len,
 {
     klen = len;
     char *kbuf = (DMA) ? dma_buf : mmio_buf;
-    if (copy_from_user(kbuf, buf, klen) == 0)
+    if (IS_MAPPED || (copy_from_user(kbuf, buf, klen) == 0))
     {
-        pr_info("Write: %s, DMA %d", kbuf, (kbuf==dma_buf));
+        pr_info("Write: %s", kbuf);
         is_data_ready=0;
         if(DMA) dma();
         else mmio();
@@ -421,8 +426,6 @@ static void read_from_device(void)
         *cur = val;
     }
     pr_info("READ from device %s\n", mmio_buf);
-    is_data_ready=1;
-    pr_info("is_data_ready %d\n", is_data_ready);
 }
 
 static void dma(void)
@@ -452,7 +455,7 @@ static void dma(void)
 static void mmio(void)
 {
     iowrite32(klen, MEM + OFFSET_MMIO_LENGTH);
-    write_to_device();
+    if(!IS_MAPPED) write_to_device();
     u32 status = 0x0;
     if(DECRYPT) status |= 0x02;
     if (INTERRUPT) {
@@ -470,7 +473,8 @@ static void mmio(void)
         {
             val = ioread32(MEM + OFFSET_MMIO_STATUS);
         } while ((val&1) == 1);
-        read_from_device();
+        if(!IS_MAPPED) read_from_device();
+        is_data_ready=1;
     }
 }
 
@@ -484,6 +488,7 @@ static irqreturn_t irq_handler(int irq, void *cookie)
         pr_info("mmio status 0x%x\n", v2);
         read_from_device();
         iowrite32(val, MEM + OFFSET_INTERRUPT_ACK);
+        is_data_ready=1;
         return IRQ_HANDLED;
     } else if (val == INTERRUPT_DMA)
     {
@@ -507,6 +512,22 @@ static int set_interrupts(struct pci_dev *pdev)
         free_irq(IRQ_NO, (void *)(irq_handler));
     }
     return status;
+}
+
+static int cdev_mmap(struct file *filp, struct vm_area_struct *vma )
+{
+	printk( "mmap: vm_start: 0x%lx, vm_end: 0x%lx, vm_pgoff: 0x%lx\n", vma->vm_start, vma->vm_end, vma->vm_pgoff );
+	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
+    offset += (mmio_start);
+    offset = offset >> PAGE_SHIFT;
+    vma->vm_page_prot = pgprot_noncached( vma->vm_page_prot );
+    int rc = io_remap_pfn_range( vma, vma->vm_start, offset, vma->vm_end - vma->vm_start, vma->vm_page_prot );
+	if ( rc )
+	{
+		printk( KERN_INFO "MPD_mmap: io_remap_pfn_range() error: rc = %d\n", rc );
+        return -EAGAIN;
+	}
+    return 0;
 }
 
 MODULE_LICENSE("GPL");

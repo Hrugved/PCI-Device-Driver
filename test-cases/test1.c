@@ -29,13 +29,24 @@ int main( int argc, char *argv[] )
     exit(0);
   }
 
+  // map_card(cdev,1000);
+
+
+  char *actual_buff = map_card(cdev, size);
+  if(actual_buff == NULL)
+  {
+      printf("Testcase failed\n");
+      exit(0);
+  }
+  strncpy(actual_buff, msg, size);
+
   printf("Original Text: %s\n", msg);
 
-  encrypt(cdev, op_text, size, 0);
-  printf("Encrypted Text: %s\n", op_text);
+  encrypt(cdev, actual_buff, size, atoi(argv[3]));
+  printf("Encrypted Text: %s\n", actual_buff);
 
-  decrypt(cdev, op_text, size, 0);
-  printf("Decrypted Text: %s\n", op_text);
+  // decrypt(cdev, op_text, size, 0);
+  // printf("Decrypted Text: %s\n", op_text);
 
   close_handle(cdev);
   return 0;

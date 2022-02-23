@@ -1,15 +1,19 @@
 #include<crypter.h>
 #include<stdio.h>
+#include <sys/mman.h>
 
-// int arr[5];
 
-// void insert(int n, int i) {
-//   arr[i]=n;
-// }
+static void _set_decrypt(uint8_t value) {
+  int fd = open("/sys/kernel/cryptocard_sysfs/DECRYPT", O_WRONLY);
+  write (fd, (const char *)&value, 1);
+  close(fd);
+}
 
-// int get(int i) {
-//   return arr[i];
-// }
+static void _set_is_mapped(uint8_t value) {
+  int fd = open("/sys/kernel/cryptocard_sysfs/IS_MAPPED", O_WRONLY);
+  write (fd, (const char *)&value, 1);
+  close(fd);
+}
 
 /*Function template to create handle for the CryptoCard device.
 On success it returns the device handle as an integer*/
@@ -39,14 +43,12 @@ Takes four arguments
 */
 int encrypt(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length, uint8_t isMapped)
 {
-  int fd = open("/sys/kernel/cryptocard_sysfs/DECRYPT", O_WRONLY);
-  uint8_t value = 0;
-  write (fd, (const char *)&value, 1);
-  close(fd);
+  _set_decrypt(0);
+  _set_is_mapped(isMapped);
   if(write(cdev, addr, length) < 0){
     perror("write");
     exit(-1);
-   }
+  }
   if(read(cdev, addr, length) < 0){
     perror("read");
     exit(-1);
@@ -63,10 +65,8 @@ Takes four arguments
 */
 int decrypt(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length, uint8_t isMapped)
 {
-  int fd = open("/sys/kernel/cryptocard_sysfs/DECRYPT", O_WRONLY);
-  uint8_t value = 1;
-  write (fd, (const char *)&value, 1);
-  close(fd);
+  _set_decrypt(1);
+  _set_is_mapped(isMapped);
   if(write(cdev, addr, length) < 0){
     perror("write");
     exit(-1);
@@ -122,7 +122,13 @@ Takes three arguments
 Return virtual address of the mapped memory*/
 ADDR_PTR map_card(DEV_HANDLE cdev, uint64_t size)
 {
-  return NULL;
+  ADDR_PTR ptr = mmap(NULL,size,PROT_WRITE|PROT_READ,MAP_SHARED,cdev,0);
+  if (ptr == MAP_FAILED) {
+      printf("mmap failed\n");
+      return NULL;
+  }
+  ptr = ptr + 0xa8;
+  return ptr;
 }
 
 /*Function template to device input/output memory into user space.
