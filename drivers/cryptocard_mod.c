@@ -13,7 +13,8 @@
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/dma-mapping.h>
-#include <linux/mm.h> 
+#include <linux/mm.h>
+#include <linux/mutex.h>
 
 #define MY_DRIVER "my_pci_driver"
 #define IDENTIFICATION 0x10C5730
@@ -55,6 +56,8 @@ static int __init mypci_driver_init(void);
 static void __exit mypci_driver_exit(void);
 static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
 static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count);
+static ssize_t sysfs_show_tid(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
+static ssize_t sysfs_store_tid(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count);
 static int setup_sysfs(void);
 static void cleanup(void);
 static int cdev_open(struct inode *inode, struct file *file);
@@ -97,6 +100,7 @@ static u32 klen;
 static volatile int is_data_ready;
 char *dma_buf;
 dma_addr_t dma_handle;
+DEFINE_MUTEX(dev_lock);
 
 static volatile u8 INTERRUPT = 0;
 static volatile u8 DMA = 0;
@@ -104,6 +108,7 @@ static volatile u8 KEY_A = 0;
 static volatile u8 KEY_B = 0;
 static volatile u8 DECRYPT = 0;
 static volatile u8 IS_MAPPED = 0;
+static volatile int TID = 0;
 struct kobject *kobj_ref;
 struct kobj_attribute dma_attr = __ATTR(DMA, 0660, sysfs_show, sysfs_store);
 struct kobj_attribute interrupt_attr = __ATTR(INTERRUPT, 0660, sysfs_show, sysfs_store);
@@ -111,6 +116,7 @@ struct kobj_attribute keya_attr = __ATTR(KEY_A, 0660, sysfs_show, sysfs_store);
 struct kobj_attribute keyb_attr = __ATTR(KEY_B, 0660, sysfs_show, sysfs_store);
 struct kobj_attribute decrypt_attr = __ATTR(DECRYPT, 0660, sysfs_show, sysfs_store);
 struct kobj_attribute isMapped_attr = __ATTR(IS_MAPPED, 0660, sysfs_show, sysfs_store);
+struct kobj_attribute tid_attr = __ATTR(TID, 0660, sysfs_show_tid, sysfs_store_tid);
 static struct attribute *attrs[] = {
     &dma_attr.attr,
     &interrupt_attr.attr,
@@ -199,7 +205,7 @@ static int setup_device(struct pci_dev *pdev)
 static int setup_sysfs(void)
 {
     kobj_ref = kobject_create_and_add("cryptocard_sysfs", kernel_kobj);
-    if (sysfs_create_group(kobj_ref, &attr_group))
+    if ((sysfs_create_group(kobj_ref, &attr_group)) || (sysfs_create_file(kobj_ref,&tid_attr.attr)))
     {
         kobject_put(kobj_ref);
         return -1;
@@ -263,6 +269,25 @@ static void my_driver_remove(struct pci_dev *pdev)
     pr_info("Removed: Device vid: 0x%X pid: 0x%X\n", vendor, device);
 }
 
+static ssize_t sysfs_show_tid(struct kobject *kobj, struct kobj_attribute *attr, char *buf) {
+    return sprintf(buf, "%d\n", TID);
+}
+
+static ssize_t sysfs_store_tid(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count) {
+    int val;
+    kstrtoint(buf,10,&val);
+    if(val<0) {
+        pr_info("unlocking device %d\n", TID);
+        TID = -1;
+        mutex_unlock(&dev_lock);
+    } else {
+        mutex_lock(&dev_lock);
+        TID = val;
+        pr_info("locking device %d\n", TID);
+    }
+    return count;
+}
+
 static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
     pr_info("sysfs_show %s\n", attr->attr.name);
@@ -316,9 +341,18 @@ static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, co
     return count;
 }
 
+// typedef struct {
+//     char DMA;
+//     char INTERRUPT;
+//     char key_A;
+//     char key_B;
+// } fileData;
+
 static int cdev_open(struct inode *inode, struct file *file)
 {
-    pr_info("Device File Opened...!!!\n");
+    // fileData *data = kmalloc(sizeof(fileData),GFP_KERNEL);
+    // file->private_data = data;
+    pr_info("Device File Opened\n");
     return 0;
 }
 /*
@@ -326,7 +360,9 @@ static int cdev_open(struct inode *inode, struct file *file)
 */
 static int cdev_release(struct inode *inode, struct file *file)
 {
-    pr_info("Device File Closed...!!!\n");
+    // fileData *data = (fileData*) file->private_data;
+    pr_info("Device File Closed\n");
+    // kfree(data);
     return 0;
 }
 
@@ -350,6 +386,8 @@ static ssize_t cdev_read(struct file *filp, char __user *buf, size_t len, loff_t
 */
 static ssize_t cdev_write(struct file *filp, const char __user *buf, size_t len, loff_t *off)
 {
+    pr_info("pid: %d\n", current->pid);
+    return 0;
     klen = len;
     char *kbuf = (DMA) ? dma_buf : mmio_buf;
     if (IS_MAPPED || (copy_from_user(kbuf, buf, klen) == 0))

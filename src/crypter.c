@@ -1,7 +1,27 @@
 #include<crypter.h>
 #include<stdio.h>
-#include <sys/mman.h>
+#include<sys/mman.h>
+#include<unistd.h>
 
+void _lock_device() 
+{
+  int fd = open("/sys/kernel/cryptocard_sysfs/TID", O_WRONLY);
+  int tid = gettid();
+  char buf[10];
+  int data_len = snprintf(buf, sizeof(buf), "%d\n", tid);
+  write (fd, buf, data_len);
+  close(fd);
+}
+
+void _unlock_device() 
+{
+  int fd = open("/sys/kernel/cryptocard_sysfs/TID", O_WRONLY);
+  int tid = -1;
+  char buf[10];
+  int data_len = snprintf(buf, sizeof(buf), "%d\n", tid);
+  write (fd, buf, data_len);
+  close(fd);
+}
 
 static void _set_decrypt(uint8_t value) {
   int fd = open("/sys/kernel/cryptocard_sysfs/DECRYPT", O_WRONLY);
@@ -24,7 +44,7 @@ DEV_HANDLE create_handle()
       perror("open");
       exit(-1);
   }
-  return fd;
+  return fd; 
 }
 
 /*Function template to close device handle.
@@ -49,10 +69,10 @@ int encrypt(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length, uint8_t isMapped)
     perror("write");
     exit(-1);
   }
-  if(read(cdev, addr, length) < 0){
-    perror("read");
-    exit(-1);
-  }
+  // if(read(cdev, addr, length) < 0){
+  //   perror("read");
+  //   exit(-1);
+  // }
   return 0;
 }
 
