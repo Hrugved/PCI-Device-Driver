@@ -6,6 +6,7 @@
 
 #define DMA_DATA_SIZE 32768
 #define MMIO_DATA_SIZE 1048407
+#define DEVICE_MEMORY_OFFSET 0xa8
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 
 static pthread_mutex_t mutex_list;

@@ -48,6 +48,7 @@ static struct pci_device_id my_driver_id_table[] = {
     }};
 
 MODULE_DEVICE_TABLE(pci, my_driver_id_table);
+DECLARE_WAIT_QUEUE_HEAD(wq);
 
 static int my_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent);
 static void my_driver_remove(struct pci_dev *pdev);
@@ -379,7 +380,9 @@ static int cdev_release(struct inode *inode, struct file *file)
 */
 static ssize_t cdev_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
 {
-    while(is_data_ready==0) {udelay(1000);}
+    if(INTERRUPT) {
+        wait_event_interruptible(wq,is_data_ready==1);
+    }
     char *kbuf = (DMA) ? dma_buf : mmio_buf;
     if (IS_MAPPED || (copy_to_user(buf, kbuf, len) == 0))
     {
@@ -526,23 +529,26 @@ static void mmio(void)
 
 static irqreturn_t irq_handler(int irq, void *cookie)
 {
+
     u32 val = ioread32(MEM + OFFSET_INTERRUPT_STATUS);
     if (val == INTERRUPT_MMIO)
     {
+        iowrite32(val, MEM + OFFSET_INTERRUPT_ACK);
         pr_info("interrupt status 0x%x\n", val);
         u32 v2 = ioread32(MEM + OFFSET_MMIO_STATUS);
         pr_info("mmio status 0x%x\n", v2);
         read_from_device();
-        iowrite32(val, MEM + OFFSET_INTERRUPT_ACK);
         is_data_ready=1;
+        wake_up_interruptible(&wq);
         return IRQ_HANDLED;
     } else if (val == INTERRUPT_DMA)
     {
+        iowrite32(val, MEM + OFFSET_INTERRUPT_ACK);
         pr_info("interrupt status 0x%x\n", val);
         u32 v2 = ioread32(MEM + OFFSET_DMA_COMMAND);
         pr_info("dma status 0x%x\n", v2);
-        iowrite32(val, MEM + OFFSET_INTERRUPT_ACK);
         is_data_ready = 1;
+        wake_up_interruptible(&wq);
         return IRQ_HANDLED;
     }
     return IRQ_NONE;
