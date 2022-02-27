@@ -21,6 +21,8 @@
 #define IRQ_NO 11
 #define INTERRUPT_MMIO 0x001
 #define INTERRUPT_DMA 0x100
+#define DATA_SIZE 1048408
+#define DMA_DATA_SIZE 32768
 
 #define OFFSET_IDENTIFICATION 0x0
 #define OFFSET_LIVENESS 0x4
@@ -96,7 +98,7 @@ static struct class *dev_class;
 static struct cdev cryptcard_cdev;
 static u8 __iomem *MEM;
 char *mmio_buf;
-static u32 klen;
+static u64 klen;
 static volatile int is_data_ready;
 char *dma_buf;
 dma_addr_t dma_handle;
@@ -188,11 +190,17 @@ static int setup_device(struct pci_dev *pdev)
         release_device(pdev);
         return -EIO;
     }
-    // dma_buf = kmalloc(1000000, GFP_KERNEL);
-    mmio_buf = kmalloc(1000000, GFP_KERNEL);
-    dma_buf = dma_alloc_coherent(&(pdev->dev), 1000000, &dma_handle, GFP_KERNEL);
-    if (!dma_buf) {
-        printk(KERN_ERR "failed to allocate coherent buffer\n");
+    mmio_buf = kmalloc(DATA_SIZE, GFP_KERNEL);
+    if (mmio_buf==NULL) {
+        pr_err("failed to allocate mmio_buf\n");
+        return -EIO;
+    }
+    // if (dma_set_mask_and_coherent(&(pdev->dev), DMA_BIT_MASK(16))) {
+	// 	pr_info("dma_set_mask_and_coherent failed for 16 bit\n");
+	// }
+    dma_buf = dma_alloc_coherent(&(pdev->dev), DMA_DATA_SIZE, &dma_handle, GFP_KERNEL);
+    if (dma_buf==NULL) {
+        pr_err("failed to allocate coherent buffer\n");
         return -EIO;
     }
     if (check_identification(pdev) < 0)
@@ -371,7 +379,7 @@ static int cdev_release(struct inode *inode, struct file *file)
 */
 static ssize_t cdev_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
 {
-    while(is_data_ready==0) {udelay(100);}
+    while(is_data_ready==0) {udelay(1000);}
     char *kbuf = (DMA) ? dma_buf : mmio_buf;
     if (IS_MAPPED || (copy_to_user(buf, kbuf, len) == 0))
     {
@@ -386,8 +394,7 @@ static ssize_t cdev_read(struct file *filp, char __user *buf, size_t len, loff_t
 */
 static ssize_t cdev_write(struct file *filp, const char __user *buf, size_t len, loff_t *off)
 {
-    pr_info("pid: %d\n", current->pid);
-    return 0;
+    pr_info("hit\n");
     klen = len;
     char *kbuf = (DMA) ? dma_buf : mmio_buf;
     if (IS_MAPPED || (copy_from_user(kbuf, buf, klen) == 0))
@@ -492,6 +499,7 @@ static void dma(void)
 
 static void mmio(void)
 {
+    pr_info("mmio klen %llu", klen);
     iowrite32(klen, MEM + OFFSET_MMIO_LENGTH);
     if(!IS_MAPPED) write_to_device();
     u32 status = 0x0;
