@@ -4,8 +4,8 @@
 #include<unistd.h>
 #include<pthread.h>
 
-#define DMA_DATA_SIZE 32768
-#define MMIO_DATA_SIZE 1048407
+#define DMA_CHUNK_SIZE 32768
+#define MMIO_CHUNK_SIZE 1048407
 #define DEVICE_MEMORY_OFFSET 0xa8
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 
@@ -131,11 +131,23 @@ static uint8_t _set_device_config(DEV_HANDLE cdev, uint8_t isMapped, uint8_t isD
   dev_handle *handle = _get_handle(cdev);
   _set_device_is_mapped(isMapped);
   _set_device_decrypt(isDecrypt);
-  _set_device_dma(handle->DMA);
+  _set_device_dma(isMapped ? 0 : (handle->DMA)); // MMAP only supported for MMIO
   _set_device_interrupt(handle->INTERRUPT);
   _set_device_key_A(handle->key_A);
   _set_device_Key_B(handle->key_B);
-  return handle->DMA;
+  return !isMapped && handle->DMA;
+}
+
+static void _device_operate(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length) {
+  printf("CRYPTER: device operation initiated cdev %d addr %p length %d\n", cdev, addr, length);
+  if(write(cdev, addr, length) < 0){
+    perror("write");
+    exit(-1);
+  }
+  if(read(cdev, addr, length) < 0){
+    perror("read");
+    exit(-1);
+  }
 }
 
 /*Function template to create handle for the CryptoCard device.
@@ -159,17 +171,6 @@ void close_handle(DEV_HANDLE cdev)
   close(cdev);
 }
 
-void _device_operate(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length) {
-  if(write(cdev, addr, length) < 0){
-    perror("write");
-    exit(-1);
-  }
-  if(read(cdev, addr, length) < 0){
-    perror("read");
-    exit(-1);
-  }
-}
-
 /*Function template to encrypt a message using MMIO/DMA/Memory-mapped.
 Takes four arguments
   cdev: opened device handle
@@ -179,9 +180,10 @@ Takes four arguments
 */
 int encrypt(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length, uint8_t isMapped)
 {
+  addr = (char*) addr;
   _lock_device();
   uint8_t DMA = _set_device_config(cdev,isMapped,UNSET);
-  uint64_t chunk_size = (DMA) ? DMA_DATA_SIZE : MMIO_DATA_SIZE;
+  uint64_t chunk_size = (DMA) ? DMA_CHUNK_SIZE : MMIO_CHUNK_SIZE;
   int i;
   for (i = 0; i < ((length + chunk_size - 1) / chunk_size); i++)
   {
@@ -200,9 +202,10 @@ Takes four arguments
 */
 int decrypt(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length, uint8_t isMapped)
 {
+  addr = (char*) addr;
   _lock_device();
   uint8_t DMA = _set_device_config(cdev,isMapped,SET);
-  uint64_t chunk_size = (DMA) ? DMA_DATA_SIZE : MMIO_DATA_SIZE;
+  uint64_t chunk_size = (DMA) ? DMA_CHUNK_SIZE : MMIO_CHUNK_SIZE;
   int i;
   for (i = 0; i < ((length + chunk_size - 1) / chunk_size); i++)
   {
@@ -250,7 +253,11 @@ Takes three arguments
 Return virtual address of the mapped memory*/
 ADDR_PTR map_card(DEV_HANDLE cdev, uint64_t size)
 {
-  ADDR_PTR ptr = mmap(NULL,size,PROT_WRITE|PROT_READ,MAP_SHARED,cdev,0);
+  if(size>MMIO_CHUNK_SIZE) {
+    printf("mmap failed\n");
+    return NULL;
+  }
+  char *ptr = mmap(NULL,size+DEVICE_MEMORY_OFFSET,PROT_WRITE|PROT_READ,MAP_SHARED,cdev,0);
   if (ptr == MAP_FAILED) {
       printf("mmap failed\n");
       return NULL;

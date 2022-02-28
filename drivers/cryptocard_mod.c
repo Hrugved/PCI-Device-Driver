@@ -16,7 +16,7 @@
 #include <linux/mm.h>
 #include <linux/mutex.h>
 
-#define MY_DRIVER "my_pci_driver"
+#define MY_DRIVER "CRYPTOCARD_PCI_DRIVER"
 #define IDENTIFICATION 0x10C5730
 #define IRQ_NO 11
 #define INTERRUPT_MMIO 0x001
@@ -38,18 +38,15 @@
 #define OFFSET_DMA_LENGTH 0x98
 #define OFFSET_DMA_COMMAND 0xa0
 
-u16 vendor, device;
-
 /* This sample driver supports device with VID = 0x010F, and PID = 0x0F0E*/
 static struct pci_device_id my_driver_id_table[] = {
     {PCI_DEVICE(0x1234, 0xdeba)},
     {
         0,
     }};
-
 MODULE_DEVICE_TABLE(pci, my_driver_id_table);
-DECLARE_WAIT_QUEUE_HEAD(wq);
 
+/** Function Prototypes */
 static int my_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent);
 static void my_driver_remove(struct pci_dev *pdev);
 static void release_device(struct pci_dev *pdev);
@@ -77,7 +74,7 @@ static irqreturn_t irq_handler(int irq, void *cookie);
 static int set_interrupts(struct pci_dev *pdev);
 static void dma(void);
 
-/* Driver registration structure */
+/* CDEV */
 static struct pci_driver my_driver = {
     .name = MY_DRIVER,
     .id_table = my_driver_id_table,
@@ -97,14 +94,19 @@ static struct file_operations fops =
 dev_t dev = 0;
 static struct class *dev_class;
 static struct cdev cryptcard_cdev;
+static u64 klen;
 static u8 __iomem *MEM;
 char *mmio_buf;
-static u64 klen;
-static volatile int is_data_ready;
+unsigned long mmio_start, mmio_len;
 char *dma_buf;
 dma_addr_t dma_handle;
 DEFINE_MUTEX(dev_lock);
+static volatile int is_data_ready;
+DECLARE_WAIT_QUEUE_HEAD(wq_is_data_ready);
+u16 vendor, device;
+static char *NA = "N/A";
 
+/** SYSFS */
 static volatile u8 INTERRUPT = 0;
 static volatile u8 DMA = 0;
 static volatile u8 KEY_A = 0;
@@ -143,10 +145,10 @@ static int check_identification(struct pci_dev *pdev)
     unsigned int identification = ioread32(MEM + OFFSET_IDENTIFICATION);
     if (identification != IDENTIFICATION)
     {
-        pr_err("invalid identification 0x%X", identification);
+        pr_err("CRYPTOCARD_MOD ---> invalid identification 0x%X", identification);
         return -1;
     }
-    pr_info("identification verified 0x%X", identification);
+    pr_info("CRYPTOCARD_MOD ---> identification verified 0x%X", identification);
     return 0;
 }
 
@@ -157,21 +159,19 @@ static int check_liveness(struct pci_dev *pdev)
     u32 num_device = ioread32(MEM + OFFSET_LIVENESS);
     if (num_device != ~num)
     {
-        pr_err("liveness check failed, num 0x%X ~num 0x%X device 0x%X\n", num, ~num, num_device);
+        pr_err("CRYPTOCARD_MOD ---> liveness check failed, num 0x%X ~num 0x%X device 0x%X\n", num, ~num, num_device);
         return -1;
     }
-    pr_info("liveness check successful\n");
+    pr_info("CRYPTOCARD_MOD ---> liveness check successful\n");
     return 0;
 }
 
-    unsigned long mmio_start, mmio_len;
 static int setup_device(struct pci_dev *pdev)
 {
     int bar, err;
-    // unsigned long mmio_start, mmio_len;
     pci_read_config_word(pdev, PCI_VENDOR_ID, &vendor);
     pci_read_config_word(pdev, PCI_DEVICE_ID, &device);
-    pr_info("Registered: Device vid: 0x%X pid: 0x%X\n", vendor, device);
+    pr_info("CRYPTOCARD_MOD ---> Registered: Device vid: 0x%X pid: 0x%X\n", vendor, device);
     bar = pci_select_bars(pdev, IORESOURCE_MEM);
     err = pci_enable_device_mem(pdev);
     if (err)
@@ -184,7 +184,7 @@ static int setup_device(struct pci_dev *pdev)
     }
     mmio_start = pci_resource_start(pdev, 0);
     mmio_len = pci_resource_len(pdev, 0);
-    pr_info("mmio_start 0x%lX mmio_len 0x%lX\n", mmio_start, mmio_len);
+    pr_info("CRYPTOCARD_MOD ---> mmio_start 0x%lX mmio_len 0x%lX\n", mmio_start, mmio_len);
     MEM = ioremap(mmio_start, mmio_len);
     if (!MEM)
     {
@@ -193,15 +193,12 @@ static int setup_device(struct pci_dev *pdev)
     }
     mmio_buf = kmalloc(DATA_SIZE, GFP_KERNEL);
     if (mmio_buf==NULL) {
-        pr_err("failed to allocate mmio_buf\n");
+        pr_err("CRYPTOCARD_MOD ---> failed to allocate mmio_buf\n");
         return -EIO;
     }
-    // if (dma_set_mask_and_coherent(&(pdev->dev), DMA_BIT_MASK(16))) {
-	// 	pr_info("dma_set_mask_and_coherent failed for 16 bit\n");
-	// }
     dma_buf = dma_alloc_coherent(&(pdev->dev), DMA_DATA_SIZE, &dma_handle, GFP_KERNEL);
     if (dma_buf==NULL) {
-        pr_err("failed to allocate coherent buffer\n");
+        pr_err("CRYPTOCARD_MOD ---> failed to allocate coherent buffer\n");
         return -EIO;
     }
     if (check_identification(pdev) < 0)
@@ -219,7 +216,7 @@ static int setup_sysfs(void)
         kobject_put(kobj_ref);
         return -1;
     }
-    pr_info("sysfs installed Successfully\n");
+    pr_info("CRYPTOCARD_MOD ---> sysfs installed Successfully\n");
     return 0;
 }
 
@@ -228,17 +225,17 @@ static int __init mypci_driver_init(void)
     int status = pci_register_driver(&my_driver);
     if (status < 0)
     {
-        pr_err("cannot register driver, status %d\n", status);
+        pr_err("CRYPTOCARD_MOD ---> cannot register driver, status %d\n", status);
     }
     status = setup_sysfs();
     if (status < 0)
     {
-        pr_err("error creating sysfs, status %d\n", status);
+        pr_err("CRYPTOCARD_MOD ---> error creating sysfs, status %d\n", status);
     }
     status = setup_char_device();
     if (status < 0)
     {
-        pr_err("error creating char device, status %d\n", status);
+        pr_err("CRYPTOCARD_MOD ---> error creating char device, status %d\n", status);
     }
     return 0;
 }
@@ -264,7 +261,7 @@ static int my_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent
     int status = setup_device(pdev);
     if (status < 0)
     {
-        pr_err("driver error, status %d\n", status);
+        pr_err("CRYPTOCARD_MOD ---> driver error, status %d\n", status);
     }
     return 0;
 }
@@ -272,10 +269,9 @@ static int my_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent
 /* Clean up */
 static void my_driver_remove(struct pci_dev *pdev)
 {
-    // pci_free_irq_vectors(pdev);
     dma_free_coherent(&pdev->dev, 1000000, dma_buf, dma_handle);
     release_device(pdev);
-    pr_info("Removed: Device vid: 0x%X pid: 0x%X\n", vendor, device);
+    pr_info("CRYPTOCARD_MOD ---> Removed: Device vid: 0x%X pid: 0x%X\n", vendor, device);
 }
 
 static ssize_t sysfs_show_tid(struct kobject *kobj, struct kobj_attribute *attr, char *buf) {
@@ -286,20 +282,20 @@ static ssize_t sysfs_store_tid(struct kobject *kobj, struct kobj_attribute *attr
     int val;
     kstrtoint(buf,10,&val);
     if(val<0) {
-        pr_info("unlocking device %d\n", TID);
+        pr_info("CRYPTOCARD_MOD ---> unlocking device %d\n", TID);
         TID = -1;
         mutex_unlock(&dev_lock);
     } else {
         mutex_lock(&dev_lock);
         TID = val;
-        pr_info("locking device %d\n", TID);
+        pr_info("CRYPTOCARD_MOD ---> locking device %d\n", TID);
     }
     return count;
 }
 
 static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
-    pr_info("sysfs_show %s\n", attr->attr.name);
+    pr_info("CRYPTOCARD_MOD ---> sysfs_show %s\n", attr->attr.name);
     u8 val;
     if (strcmp(attr->attr.name, "DMA") == 0)
         val = DMA;
@@ -319,7 +315,7 @@ static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, cha
 static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
 {
     u8 val = *buf;
-    pr_info("sysfs_store %s %hhu\n", attr->attr.name, val);
+    pr_info("CRYPTOCARD_MOD ---> sysfs_store %s %hhu\n", attr->attr.name, val);
     if((strcmp(attr->attr.name, "KEY_A") == 0) || (strcmp(attr->attr.name, "KEY_B") == 0))
     {
         if (strcmp(attr->attr.name, "KEY_A") == 0)
@@ -335,7 +331,7 @@ static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, co
     } else {
         if (!(val == 0 || val == 1))
         {
-            pr_err("invalid value, can only be 0 or 1, recieved %hhu\n", val);
+            pr_err("CRYPTOCARD_MOD ---> invalid value, can only be 0 or 1, recieved %hhu\n", val);
             return -EINVAL;
         }
         if (strcmp(attr->attr.name, "DMA") == 0)
@@ -350,28 +346,18 @@ static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, co
     return count;
 }
 
-// typedef struct {
-//     char DMA;
-//     char INTERRUPT;
-//     char key_A;
-//     char key_B;
-// } fileData;
-
 static int cdev_open(struct inode *inode, struct file *file)
 {
-    // fileData *data = kmalloc(sizeof(fileData),GFP_KERNEL);
-    // file->private_data = data;
-    pr_info("Device File Opened\n");
+    pr_info("CRYPTOCARD_MOD ---> Device File Opened\n");
     return 0;
 }
+
 /*
 ** This function will be called when we close the Device file
 */
 static int cdev_release(struct inode *inode, struct file *file)
 {
-    // fileData *data = (fileData*) file->private_data;
-    pr_info("Device File Closed\n");
-    // kfree(data);
+    pr_info("CRYPTOCARD_MOD ---> Device File Closed\n");
     return 0;
 }
 
@@ -380,13 +366,10 @@ static int cdev_release(struct inode *inode, struct file *file)
 */
 static ssize_t cdev_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
 {
-    if(INTERRUPT) {
-        wait_event_interruptible(wq,is_data_ready==1);
-    }
     char *kbuf = (DMA) ? dma_buf : mmio_buf;
     if (IS_MAPPED || (copy_to_user(buf, kbuf, len) == 0))
     {
-        pr_info("Read: %s", kbuf);
+        pr_info("CRYPTOCARD_MOD ---> Read: %s\n", (IS_MAPPED ? NA : kbuf));
         return len;
     }
     return -1;
@@ -397,12 +380,11 @@ static ssize_t cdev_read(struct file *filp, char __user *buf, size_t len, loff_t
 */
 static ssize_t cdev_write(struct file *filp, const char __user *buf, size_t len, loff_t *off)
 {
-    pr_info("hit\n");
     klen = len;
     char *kbuf = (DMA) ? dma_buf : mmio_buf;
     if (IS_MAPPED || (copy_from_user(kbuf, buf, klen) == 0))
     {
-        pr_info("Write: %s", kbuf);
+        pr_info("CRYPTOCARD_MOD ---> Write: %s\n", (IS_MAPPED ? NA : kbuf));
         is_data_ready=0;
         if(DMA) dma();
         else mmio();
@@ -415,27 +397,27 @@ static int setup_char_device(void)
 {
     if ((alloc_chrdev_region(&dev, 0, 1, "cryptcard_dev")) < 0)
     {
-        pr_err("Cannot allocate major number for device\n");
+        pr_err("CRYPTOCARD_MOD ---> Cannot allocate major number for device\n");
         return -1;
     }
-    pr_info("Major = %d Minor = %d \n", MAJOR(dev), MINOR(dev));
+    pr_info("CRYPTOCARD_MOD ---> Major = %d Minor = %d \n", MAJOR(dev), MINOR(dev));
     cdev_init(&cryptcard_cdev, &fops);
     if ((cdev_add(&cryptcard_cdev, dev, 1)) < 0)
     {
-        pr_err("Cannot add the device to the system\n");
+        pr_err("CRYPTOCARD_MOD ---> Cannot add the device to the system\n");
         goto r_class;
     }
     if ((dev_class = class_create(THIS_MODULE, "cryptcard_class")) == NULL)
     {
-        pr_err("Cannot create the struct class for device\n");
+        pr_err("CRYPTOCARD_MOD ---> Cannot create the struct class for device\n");
         goto r_class;
     }
     if ((device_create(dev_class, NULL, dev, NULL, "cryptcard_device")) == NULL)
     {
-        pr_err("Cannot create the Device\n");
+        pr_err("CRYPTOCARD_MOD ---> Cannot create the Device\n");
         goto r_device;
     }
-    pr_info("Kernel Module Inserted Successfully\n");
+    pr_info("CRYPTOCARD_MOD ---> Kernel Module Inserted Successfully\n");
     return 0;
 r_device:
     class_destroy(dev_class);
@@ -459,7 +441,7 @@ static void write_to_device(void)
         cur += i;
         iowrite32(*cur, MEM + pos);
     }
-    pr_info("Write to device %s\n", mmio_buf);
+    pr_info("CRYPTOCARD_MOD ---> Write to device %s\n", mmio_buf);
 }
 
 static void read_from_device(void)
@@ -473,7 +455,7 @@ static void read_from_device(void)
         cur += i;
         *cur = val;
     }
-    pr_info("READ from device %s\n", mmio_buf);
+    pr_info("CRYPTOCARD_MOD ---> READ from device %s\n", mmio_buf);
 }
 
 static void dma(void)
@@ -483,14 +465,16 @@ static void dma(void)
     if(DECRYPT) status |= 0x2;
     if (INTERRUPT) {
         status |= 0x4;
-        pr_info("DMA with INTERRUPT");
     }
-    pr_info("writing DMA command register 0x%x", status);
+    pr_info("CRYPTOCARD_MOD ---> writing DMA command register 0x%x", status);
     iowrite32(dma_handle, MEM + OFFSET_DMA_DATA_ADDRESS);
     iowrite32(status, MEM + OFFSET_DMA_COMMAND);
-    if (!INTERRUPT)
+    if(INTERRUPT) {
+        pr_info("CRYPTOCARD_MOD ---> DMA with INTERRUPT");
+        wait_event_interruptible(wq_is_data_ready,is_data_ready==1);
+    } else 
     {
-        pr_info("DMA w/o INTERRUPT");
+        pr_info("CRYPTOCARD_MOD ---> DMA w/o INTERRUPT");
         u32 val;
         do
         {
@@ -502,21 +486,33 @@ static void dma(void)
 
 static void mmio(void)
 {
-    pr_info("mmio klen %llu", klen);
+    char *b1 = kmalloc(klen+5,GFP_KERNEL);
+    int i;
+    for (i = 0; i < ((klen + 4) / 4); i++)
+    {
+        u32 pos = OFFSET_DATA + i * 4;
+        u32 val = ioread32(MEM + pos);
+        u32 *cur = (u32 *)b1;
+        cur += i;
+        *cur = val;
+    }
+    pr_info("CRYPTOCARD_MOD ---> mmio klen %llu\n", klen);
     iowrite32(klen, MEM + OFFSET_MMIO_LENGTH);
     if(!IS_MAPPED) write_to_device();
     u32 status = 0x0;
     if(DECRYPT) status |= 0x02;
     if (INTERRUPT) {
         status |= 0x80;
-        pr_info("MMIO with INTERRUPT");
     }
-    pr_info("writing mmio status register 0x%x", status);
+    pr_info("CRYPTOCARD_MOD ---> writing mmio status register 0x%x\n", status);
     iowrite32(status, MEM + OFFSET_MMIO_STATUS);
     iowrite32(OFFSET_DATA, MEM + OFFSET_MMIO_DATA_ADDRESS);
-    if (!INTERRUPT)
+    if(INTERRUPT) {
+        pr_info("CRYPTOCARD_MOD ---> MMIO ( mapped = %d ) with INTERRUPT\n", IS_MAPPED);
+        wait_event_interruptible(wq_is_data_ready,is_data_ready==1);
+    } else 
     {
-        pr_info("MMIO w/o INTERRUPT");
+        pr_info("CRYPTOCARD_MOD ---> MMIO ( mapped = %d ) w/o INTERRUPT\n", IS_MAPPED);
         u32 val;
         do
         {
@@ -524,7 +520,7 @@ static void mmio(void)
         } while ((val&1) == 1);
         if(!IS_MAPPED) read_from_device();
         is_data_ready=1;
-    }
+    } 
 }
 
 static irqreturn_t irq_handler(int irq, void *cookie)
@@ -534,21 +530,17 @@ static irqreturn_t irq_handler(int irq, void *cookie)
     if (val == INTERRUPT_MMIO)
     {
         iowrite32(val, MEM + OFFSET_INTERRUPT_ACK);
-        pr_info("interrupt status 0x%x\n", val);
-        u32 v2 = ioread32(MEM + OFFSET_MMIO_STATUS);
-        pr_info("mmio status 0x%x\n", v2);
-        read_from_device();
+        pr_info("CRYPTOCARD_MOD ---> IRQ mmio\n");
+        if(!IS_MAPPED) read_from_device();
         is_data_ready=1;
-        wake_up_interruptible(&wq);
+        wake_up_interruptible(&wq_is_data_ready);
         return IRQ_HANDLED;
     } else if (val == INTERRUPT_DMA)
     {
         iowrite32(val, MEM + OFFSET_INTERRUPT_ACK);
-        pr_info("interrupt status 0x%x\n", val);
-        u32 v2 = ioread32(MEM + OFFSET_DMA_COMMAND);
-        pr_info("dma status 0x%x\n", v2);
+        pr_info("CRYPTOCARD_MOD ---> IRQ dma\n");
         is_data_ready = 1;
-        wake_up_interruptible(&wq);
+        wake_up_interruptible(&wq_is_data_ready);
         return IRQ_HANDLED;
     }
     return IRQ_NONE;
@@ -560,7 +552,7 @@ static int set_interrupts(struct pci_dev *pdev)
     int status = request_irq(IRQ_NO, irq_handler, IRQF_SHARED, "cryptocard_device", (void *)(irq_handler));
     if (status < 0)
     {
-        pr_err("cannot register IRQ");
+        pr_err("CRYPTOCARD_MOD ---> cannot register IRQ");
         free_irq(IRQ_NO, (void *)(irq_handler));
     }
     return status;
@@ -569,22 +561,27 @@ static int set_interrupts(struct pci_dev *pdev)
 static int cdev_mmap(struct file *filp, struct vm_area_struct *vma )
 {
 	printk( "mmap: vm_start: 0x%lx, vm_end: 0x%lx, vm_pgoff: 0x%lx\n", vma->vm_start, vma->vm_end, vma->vm_pgoff );
-	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
+	pr_info("%llu\n", PAGE_SHIFT);
+    unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
+    pr_info("%llu\n", offset);
     offset += (mmio_start);
+    pr_info("%llu\n", offset);
     offset = offset >> PAGE_SHIFT;
+    pr_info("%llu\n", offset);
+    pr_info("%llu\n", ( vma->vm_end - vma->vm_start));
     vma->vm_page_prot = pgprot_noncached( vma->vm_page_prot );
     int rc = io_remap_pfn_range( vma, vma->vm_start, offset, vma->vm_end - vma->vm_start, vma->vm_page_prot );
-	if ( rc )
+	if(rc)
 	{
-		printk( KERN_INFO "MPD_mmap: io_remap_pfn_range() error: rc = %d\n", rc );
+		pr_err("CRYPTOCARD_MOD ---> MPD_mmap: io_remap_pfn_range() error: rc = %d\n", rc );
         return -EAGAIN;
 	}
     return 0;
 }
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("ruke");
-MODULE_DESCRIPTION("Test PCI driver");
+MODULE_AUTHOR("whrugved");
+MODULE_DESCRIPTION("CS730 CRYPTOCARD PCI driver");
 MODULE_VERSION("0.1");
 
 module_init(mypci_driver_init);
