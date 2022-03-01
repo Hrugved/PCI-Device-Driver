@@ -25,7 +25,7 @@ create-dev: $(BENCH_SRC)/file_create.c
 	$(CC) -o $@ $<
 
 test1: $(OBJ)/test1.o $(LIB)/libcrypter.so
-	$(CC) -o $@ -I$(INC) $< -L$(LIB) -lcrypter
+	$(CC) -o $@ -I$(INC) $< -L$(LIB) -lcrypter -pthread
 
 dma: $(BENCH_OBJ)/dma.o $(LIB)/libcrypter.so
 	$(CC) -o $@ -I$(INC) $< -L$(LIB) -lcrypter

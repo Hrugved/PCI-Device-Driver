@@ -139,7 +139,7 @@ static uint8_t _set_device_config(DEV_HANDLE cdev, uint8_t isMapped, uint8_t isD
 }
 
 static void _device_operate(DEV_HANDLE cdev, ADDR_PTR addr, uint64_t length) {
-  printf("CRYPTER: device operation initiated cdev %d addr %p length %d\n", cdev, addr, length);
+  // printf("CRYPTER: device operation initiated cdev %d addr %p length %d\n", cdev, addr, length);
   if(write(cdev, addr, length) < 0){
     perror("write");
     exit(-1);
